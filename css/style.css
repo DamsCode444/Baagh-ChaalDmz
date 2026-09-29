@@ -1,0 +1,382 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+
+    /* display: flex;
+    justify-content: center;
+    align-items: center; */
+
+    font-family: Arial, sans-serif;
+
+    background: #ce943d;
+}
+
+.game-container {
+    display: grid;
+
+    grid-template-columns: 380px 650px 280px;
+    gap: 75px;
+
+    width: fit-content;
+    margin: 0 auto;
+
+    min-height: 100vh;
+
+    align-items: center;
+}
+
+.board-container {
+    position: relative;
+
+    width: 650px;
+    height: 650px;
+}
+
+.about-panel {
+    width: 380px;
+    height: 650px;
+
+    padding: 20px;
+
+    border: 3px solid #661a10;
+    border-radius: 10px;
+
+    background: #d9b77a;
+
+    box-sizing: border-box;
+}
+
+
+.game-info {
+    width: 280px;
+    height: 650px;
+
+    padding: 20px;
+
+    border: 3px solid #661a10;
+    border-radius: 10px;
+
+    background: #d9b77a;
+
+    box-sizing: border-box;
+}
+
+.about-panel p, ul, li {
+    font-size: small;
+}
+
+h1 {
+    font-size: 28px;
+    white-space: nowrap;
+    margin-top: 0;
+    margin-bottom: 25px;
+}
+
+.game-info h2 {
+    margin-top: 0;
+    margin-bottom: 20px;
+}
+
+.game-info p {
+    margin: 12px 0;
+}
+
+
+#board {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 1 / 1;
+
+    background: #d9b77a;
+}
+
+/* Board lines */
+
+.board-line {
+    position: absolute;
+
+    height: 3px;
+
+    background: #661a10;
+
+    transform-origin: left center;
+}
+
+/* Board points */
+
+.board-point {
+    position: absolute;
+
+    width: 18px;
+    height: 18px;
+
+    border-radius: 50%;
+
+    background: #661a10;
+
+    border: 2px solid #d9b77a;
+
+    transform: translate(-50%, -50%);
+
+    z-index: 2;
+}
+
+.board-point:hover {
+    width: 24px;
+    height: 24px;
+    background: #8a1c0e;
+
+    cursor: pointer;
+}
+
+.position-number {
+    position: absolute;
+    top: -18px;
+    left: -18px;
+    font-size: 12px;
+    color: #534f4f;
+    pointer-events: none;
+}
+
+/* Tiger */
+
+.tiger {
+    position: absolute;
+
+    width: 32px;
+    height: 32px;
+
+    border-radius: 50%;
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    font-size: 28px;
+
+    background: rgb(255, 123, 0);
+
+    /* border: 2px solid #333; */
+
+    transform: translate(-50%, -50%);
+
+    z-index: 3;
+    
+    pointer-events: none;
+}
+
+
+.goat {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 26px;
+
+    background: white;
+    /* border: 2px solid #333; */
+
+    transform: translate(-50%, -50%);
+    z-index: 3;
+    
+    pointer-events: none;
+}
+
+#new-game {
+    width: 100%;
+    margin-top: 15px;
+    padding: 10px;
+    font-size: 16px;
+    font-weight: 600;
+
+    background-color: #e06c00;
+    color: #ccc;
+
+    border: none;
+    border-radius: 6px;
+
+    cursor: pointer;
+}
+
+#new-game:hover {
+    background-color: #f7861d;
+}
+
+.tiger.selected,
+.goat.selected {
+    outline: 4px solid gold;
+    outline-offset: 5px;
+}
+
+.selected-piece {
+    transform: scale(1.2);
+    outline: 3px solid gold;
+    outline-offset: 3px;
+}
+
+/* .valid-move {
+    border: rgb(14, 197, 14);
+    background: rgb(14, 197, 14);
+    box-shadow: 0 0 0 4px white;
+}
+
+.capture-move {
+    border: red;
+    background: red;
+    box-shadow: 0 0 0 5px gold;
+} */
+
+
+.board-point.valid-move {
+    border: rgb(0, 255, 0);
+    background-color: rgba(0, 200, 0, 1);
+    box-shadow: 0 0 20px rgba(0, 200, 0, 0.8);
+}
+
+.board-point.capture-move {
+    border: rgb(255, 0, 0);
+    background-color: rgba(220, 50, 50, 1);
+    box-shadow: 0 0 20px rgba(220, 50, 50, 0.8);
+}
+
+.board-point.valid-move.capture-move {
+    border: rgb(255, 0, 0);
+    background-color: rgba(220, 50, 50, 1);
+    box-shadow: 0 0 20px rgba(220, 50, 50, 0.8);
+}
+
+
+
+/* .tiger,
+.goat {
+    cursor: pointer;
+}
+
+.tiger.selected,
+.goat.selected {
+    cursor: default;
+} */
+
+
+
+#game-status {
+    font-weight: bold;
+    font-size: 1.2rem;
+}
+
+/* #goats-captured {
+    color: orange;
+} */
+
+@media (max-width: 950px) {
+
+    .game-container {
+        grid-template-columns: 1fr;
+        width: min(650px, 90vw);
+    }
+
+    .board-container {
+        width: 100%;
+    }
+
+    .about-panel,
+    .game-info {
+        width: 100%;
+        height: auto;
+    }
+}
+
+
+
+.game-log {
+    margin-top: 25px;
+}
+
+.game-log h3 {
+    margin-bottom: 10px;
+}
+
+#game-log {
+    height: 210px;
+    overflow-y: auto;
+    padding: 10px;
+    border: 1px solid #000000;
+    border-radius: 6px;
+    color: #ee6868;
+    background: #571108;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+
+.game-over-overlay {
+    display: none;
+
+    position: fixed;
+    inset: 0;
+
+    background: rgba(0, 0, 0, 0.45);
+
+    justify-content: center;
+    align-items: center;
+
+    z-index: 1000;
+}
+
+
+.game-over-popup {
+    width: 360px;
+
+    padding: 30px;
+
+    background: #f8f8f8;
+
+    border-radius: 12px;
+
+    text-align: center;
+
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+
+#game-over-title {
+    font-size: 32px;
+    font-weight: bold;
+
+    margin-bottom: 15px;
+}
+
+#game-over-message {
+    font-size: 18px;
+
+    margin-bottom: 25px;
+}
+
+#game-over-new-game {
+    width: 100%;
+
+    padding: 12px;
+
+    font-size: 16px;
+    font-weight: bold;
+
+    background: #176b05;
+    color: white;
+
+    border: none;
+    border-radius: 6px;
+
+    cursor: pointer;
+}
+
+#game-over-new-game:hover {
+    background: #125404;
+}
