@@ -1,0 +1,85 @@
+/* ==========================================================
+   theme.css: everything about how the game LOOKS.
+   Change values here and refresh the page. No JavaScript needed.
+   Sizes written in "cqw" are a % of the board's width, so pieces
+   scale with the board on every screen (1cqw = 1% of the board).
+   ========================================================== */
+:root {
+
+  /* ---------- ICONS ----------
+     TEXT icons (headings, status messages, dropdown): any emoji or text.      */
+  --tiger-icon: "🐯";
+  --goat-icon:  "🐐";
+
+  /* BOARD PIECES: by default they show the text icons above.
+     To show PICTURES on the board while keeping emoji in the text:
+     set the piece icons to "" (empty) and point the images at your files.
+     To go back to emoji on the board: delete these 4 lines. */
+  --tiger-piece-icon: "";
+  --goat-piece-icon:  "";
+  --tiger-image: url("../img/tiger.png");
+  --goat-image:  url("../img/goat.png");
+
+  /* ---------- PAGE & PANELS ---------- */
+  --page-bg:       #c98a35;
+  --page-bg-light: #e3b565;      /* soft glow at the top of the page */
+  --panel-bg:      #f6e8c8;
+  --panel-border:  #7a3b17;
+  --text-color:    #2b1608;
+  --muted-color:   #7a5a3a;      /* small labels */
+
+  /* ---------- BOARD ---------- */
+  --board-bg:      #e8c88f;
+  --board-bg-light:#f2dba9;
+  --board-frame:   #5b2a10;      /* the thick wooden frame */
+  --line-color:    #6a2f12;
+  --point-color:   #5b2a10;      /* empty points */
+  --point-ring:    #e8c88f;
+
+  /* ---------- PIECES ---------- */
+  --tiger-bg:      #2b1608;      /* dark disc so the tiger stands out */
+  --tiger-ring:    #ff8a00;
+  --goat-bg:       #fff6e0;
+  --goat-ring:     #8a5a2b;
+  --selected-ring: #2f9bff;      /* the piece you picked */
+
+  /* ---------- HIGHLIGHTS ---------- */
+  --move-color:    #34c46b;      /* a point you can move to */
+  --move-ring:     #c9f7da;
+  --capture-color: #e5483f;      /* a point where a tiger can capture */
+  --capture-ring:  #ffd0cb;
+  --last-move-ring:#2f9bff;      /* rings showing the last move */
+
+  /* ---------- RESULT COLOURS (turn banner + game-over popup) ---------- */
+  --win-color:     #1f8a4c;      /* you won */
+  --lose-color:    #c8332b;      /* you lost */
+  --draw-color:    #4a6f9c;      /* draw */
+
+  /* ---------- BUTTONS ---------- */
+  --button-bg:       #d9620b;
+  --button-hover-bg: #f07818;
+  --button-text:     #ffffff;
+
+  /* ---------- SIZES ---------- */
+  --board-max:        640px;     /* biggest the board will ever be */
+  --piece-size:       11cqw;     /* tigers and goats */
+  --piece-icon-size:  6.8cqw;    /* the emoji inside them */
+  --point-size:       2.8cqw;    /* empty points */
+  --point-size-active:5.2cqw;    /* highlighted points */
+  --hit-size:         13cqw;     /* clickable area around each point (keep >= 44px on phones) */
+  --line-width:       2.5px;
+  --radius:           16px;
+
+  /* ---------- ANIMATION TIMES (in ms; set one to 0ms to switch it off) ---------- */
+  --anim-move:        280ms;     /* a piece sliding to its new point */
+  --anim-jump:        420ms;     /* a tiger jumping over a goat */
+  --anim-drop:        320ms;     /* a goat being placed (also the capture counter bump) */
+  --anim-death:       450ms;     /* a captured goat shrinking away */
+  --anim-death-delay: 160ms;     /* ...starting this long after the tiger leaves */
+  --anim-pulse:      1100ms;     /* the glow on green / red points */
+  --anim-popup:       240ms;     /* game-over popup appearing */
+  --anim-popup-delay: 650ms;     /* wait before the popup, so you see the last move */
+
+  /* ---------- TEXT ---------- */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
