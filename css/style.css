@@ -107,6 +107,7 @@ button:disabled { opacity: .4; cursor: default; }
   body { padding: 8px; }
   .panel { padding: 14px; }
   .stat b { font-size: 20px; }
+  #gamePanelTitle { display: none;}
 }
 
 /* ================= ANIMATIONS (the timings live in theme.css) ================= */
