@@ -21,7 +21,8 @@
   --goat-image:  url("../img/goat.png");
 
   /* ---------- PAGE & PANELS ---------- */
-  --page-bg:       #c98a35;
+  --page-bg:       #FF7518;
+  /* --page-bg:       #c98a35; */
   --page-bg-light: #e3b565;      /* soft glow at the top of the page */
   --panel-bg:      #f6e8c8;
   --panel-border:  #7a3b17;
