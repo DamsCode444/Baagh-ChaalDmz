@@ -1,25 +1,31 @@
 const { createClient } = require("@libsql/client");
 const { GameError } = require("./errors.cjs");
 const { createDatabaseTransport } = require("./db-transport.cjs");
+const { silentLogger } = require("./logging.cjs");
 class RoomStore {
-  constructor(config) {
+  constructor(config, logger = silentLogger) {
+    this.logger = logger;
     this.transport = createDatabaseTransport(config);
-    const { proxyUrl, useSystemProxy, ...database } = config;
+    const { proxyUrl, useSystemProxy, requestTimeoutMs, ...database } = config;
     try { this.client = createClient({ ...database, fetch: this.transport.fetch }); }
     catch (error) { this.transport.close().catch(() => {}); throw error; }
   }
+  database(operation, work, fields = {}) { return this.logger.measure(operation, work, { route: this.transport.route, ...fields }); }
   async retrySafe(operation) {
+    const started = Date.now();
     for (let attempt = 0; ; attempt++) {
       try { return await operation(); }
       catch (error) {
         const transient = error.name === "TypeError" || /^(UND_ERR_|ECONN|ETIMEDOUT|EAI_AGAIN)/.test(error.code || error.cause?.code || "");
-        if (!transient || attempt >= 3) throw error;
+        // Only retry a quick transient failure. Repeating slow timeouts keeps
+        // users and room queues waiting long after the browser gives up.
+        if (!transient || attempt >= 1 || Date.now() - started >= 1500) throw error;
         await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt));
       }
     }
   }
   async init() {
-    await this.retrySafe(() => this.client.batch([
+    await this.database("schema", () => this.retrySafe(() => this.client.batch([
       `CREATE TABLE IF NOT EXISTS baagh_chaal_rooms (
         code TEXT PRIMARY KEY, version INTEGER NOT NULL, expires_at INTEGER NOT NULL, data TEXT NOT NULL
       )`,
@@ -36,34 +42,35 @@ class RoomStore {
         FOREIGN KEY (room_code) REFERENCES baagh_chaal_rooms(code) ON DELETE CASCADE
       )`,
       "CREATE INDEX IF NOT EXISTS baagh_chaal_rooms_expiry ON baagh_chaal_rooms(expires_at)"
-    ], "write"));
+    ], "write")));
   }
   async loadAll(now) {
-    const result = await this.retrySafe(() => this.client.execute({ sql: "SELECT data FROM baagh_chaal_rooms WHERE expires_at > ?", args: [now] }));
+    const result = await this.database("loadRooms", () => this.retrySafe(() => this.client.execute({ sql: "SELECT data FROM baagh_chaal_rooms WHERE expires_at > ?", args: [now] })));
     return result.rows.map(row => JSON.parse(row.data));
   }
   async purgeExpired(now) {
-    await this.retrySafe(() => this.client.batch([
+    await this.database("purgeExpired", () => this.retrySafe(() => this.client.batch([
       { sql: "DELETE FROM baagh_chaal_moves WHERE room_code IN (SELECT code FROM baagh_chaal_rooms WHERE expires_at <= ?)", args: [now] },
       { sql: "DELETE FROM baagh_chaal_matches WHERE room_code IN (SELECT code FROM baagh_chaal_rooms WHERE expires_at <= ?)", args: [now] },
       { sql: "DELETE FROM baagh_chaal_rooms WHERE expires_at <= ?", args: [now] }
-    ], "write"));
+    ], "write")));
   }
   async get(code) {
-    const result = await this.retrySafe(() => this.client.execute({ sql: "SELECT data FROM baagh_chaal_rooms WHERE code = ?", args: [code] }));
+    const result = await this.database("getRoom", () => this.retrySafe(() => this.client.execute({ sql: "SELECT data FROM baagh_chaal_rooms WHERE code = ?", args: [code] })), { room: code });
     return result.rows[0] ? JSON.parse(result.rows[0].data) : null;
   }
   async create(room) {
-    await this.client.execute({
-      sql: "INSERT INTO baagh_chaal_rooms(code, version, expires_at, data) VALUES (?, ?, ?, ?)",
+    const result = await this.database("createRoom", () => this.client.execute({
+      sql: "INSERT INTO baagh_chaal_rooms(code, version, expires_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(code) DO NOTHING",
       args: [room.code, room.version, room.expiresAt, JSON.stringify(room)]
-    });
+    }), { room: room.code });
+    return result.rowsAffected === 1;
   }
   async findMove(gameId, playerId, moveId) {
-    const result = await this.retrySafe(() => this.client.execute({
+    const result = await this.database("findMove", () => this.retrySafe(() => this.client.execute({
       sql: "SELECT request_json, response_json FROM baagh_chaal_moves WHERE game_id = ? AND player_id = ? AND move_id = ?",
       args: [gameId, playerId, moveId]
-    }));
+    })));
     return result.rows[0] ? { request: result.rows[0].request_json, response: JSON.parse(result.rows[0].response_json) } : null;
   }
   // State and request acknowledgement commit together, before broadcasting.
@@ -88,15 +95,15 @@ class RoomStore {
         JSON.stringify(room.game)]
     });
     // libSQL sends this transaction, including BEGIN/COMMIT, in one request.
-    const results = await this.client.batch(statements, "write");
+    const results = await this.database("saveRoom", () => this.client.batch(statements, "write"), { room: room.code, version: room.version });
     if (results[0].rowsAffected !== 1) throw new GameError("STATE_CONFLICT");
   }
   async remove(code) {
-    await this.client.batch([
+    await this.database("removeRoom", () => this.client.batch([
       { sql: "DELETE FROM baagh_chaal_moves WHERE room_code = ?", args: [code] },
       { sql: "DELETE FROM baagh_chaal_matches WHERE room_code = ?", args: [code] },
       { sql: "DELETE FROM baagh_chaal_rooms WHERE code = ?", args: [code] }
-    ], "write");
+    ], "write"), { room: code });
   }
   async close() { this.client.close(); await this.transport.close(); }
 }

@@ -50,8 +50,9 @@ function createDatabaseTransport(config, { env = process.env, platform = process
   if (config.fetch || !/^(libsql|https?):/i.test(config.url)) return direct;
   let dispatcher, route;
   const explicit = config.proxyUrl?.trim();
-  if (explicit?.toLowerCase() === "direct") return direct;
-  if (explicit) {
+  if (explicit?.toLowerCase() === "direct") {
+    route = "direct";
+  } else if (explicit) {
     dispatcher = new ProxyAgent(proxyUrl(explicit)); route = "configured proxy";
   } else {
     const httpProxy = env.http_proxy ?? env.HTTP_PROXY ?? "";
@@ -71,12 +72,18 @@ function createDatabaseTransport(config, { env = process.env, platform = process
       }
     }
   }
-  if (!dispatcher) return direct;
+  const timeoutMs = config.requestTimeoutMs ?? 5000;
   return {
     // Scope the dispatcher to database requests; do not change global fetch.
-    fetch: (request, init) => globalThis.fetch(request, { ...init, dispatcher }),
-    route,
-    close: () => dispatcher.destroy()
+    // The signal also bounds reading the body after response headers arrive.
+    fetch: (request, init) => {
+      const deadline = AbortSignal.timeout(timeoutMs);
+      const callerSignal = init?.signal || request?.signal;
+      return globalThis.fetch(request, { ...init, ...(dispatcher ? { dispatcher } : {}),
+        signal: callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline });
+    },
+    route: route || "direct",
+    close: async () => { if (dispatcher) await dispatcher.destroy(); }
   };
 }
 

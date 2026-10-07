@@ -44,8 +44,9 @@ test("board buttons support arrow navigation, labels and focus preservation", as
   assert.equal(win.document.activeElement.dataset.p, "13"); ui.click(13);
   assert.equal(win.document.activeElement.dataset.p, "13"); assert.equal(ui.state().board[13], "goat");
 });
-async function onlineUi(t) {
-  const server = await createServer({ database: { url: ":memory:" }, rateLimits: false });
+async function onlineUi(t, beforeConnect = () => {}) {
+  const server = await createServer({ database: { url: ":memory:" }, rateLimits: false, logLevel: "silent" });
+  beforeConnect(server);
   const address = await server.listen(0, "127.0.0.1"), base = `http://127.0.0.1:${address.port}`, windows = [], errors = [];
   t.after(async () => {
     for (const win of windows) { await win.eval("Multiplayer.leave()"); win.close(); }
@@ -96,6 +97,22 @@ test("real frontend scripts create, invite, join, synchronize, resign and rematc
   await waitFor(() => a.eval("Multiplayer.state.side") === "tiger" && refreshed.eval("Multiplayer.state.side") === "goat");
   assert.equal(docA.getElementById("inHand").textContent, "20");
   assert.equal(docA.getElementById("overlay").style.display, "none");
+  assert.deepEqual(errors, []);
+});
+
+test("private room results release lobby controls even when socket acknowledgements are lost", async t => {
+  const { a, b, docA, docB, errors } = await onlineUi(t, server => {
+    server.io.on("connection", socket => {
+      socket.use((packet, next) => {
+        if (["room:create", "room:join"].includes(packet[0]) && typeof packet.at(-1) === "function") packet[packet.length - 1] = () => {};
+        next();
+      });
+    });
+  });
+  assert.equal(a.eval("Multiplayer.state.busy"), false); assert.equal(b.eval("Multiplayer.state.busy"), false);
+  assert(a.sessionStorage.getItem("baagh-chaal-seat-v1")); assert(b.sessionStorage.getItem("baagh-chaal-seat-v1"));
+  assert.equal(docA.getElementById("connectionStatus").textContent, "Connected");
+  assert.equal(docB.getElementById("networkError").hidden, true);
   assert.deepEqual(errors, []);
 });
 

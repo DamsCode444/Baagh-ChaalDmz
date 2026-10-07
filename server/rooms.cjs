@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const Rules = require("../js/rules.js");
 const { requireValue, payload } = require("./errors.cjs");
+const { silentLogger, errorDetails } = require("./logging.cjs");
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const channel = code => `game:${code}`;
 const hash = token => crypto.createHash("sha256").update(token).digest("hex");
@@ -27,23 +28,37 @@ function playerName(value) {
   requireValue(typeof value === "string" && value.trim().length <= 24, "INVALID_NAME");
   return value.trim().replace(/[\u0000-\u001f\u007f]/g, "") || "Player";
 }
-function makePlayer(side, name, socketId) {
-  const token = crypto.randomBytes(32).toString("hex");
+function makePlayer(side, name, socketId, recoveryToken) {
+  const token = recoveryToken || crypto.randomBytes(32).toString("hex");
   return { token, player: { id: crypto.randomUUID(), side, name, tokenHash: hash(token),
     socketId, connected: true, left: false, disconnectDeadline: null } };
+}
+function lobbyRequest(request) {
+  requireValue(request.requestId === undefined || typeof request.requestId === "string"
+    && /^[a-zA-Z0-9_-]{8,80}$/.test(request.requestId), "INVALID_REQUEST");
+  requireValue(request.recoveryToken === undefined || typeof request.requestId === "string"
+    && typeof request.recoveryToken === "string" && /^[a-f0-9]{64}$/.test(request.recoveryToken), "INVALID_REQUEST");
 }
 
 class RoomService {
   constructor(store, io, options = {}) {
     this.store = store; this.io = io; this.rooms = new Map(); this.queues = new Map();
     this.moveReceipts = new Map();
+    this.creatingRooms = 0;
+    this.logger = options.logger || silentLogger;
+    this.lobbyAttempts = new Map();
     this.graceMs = options.graceMs || 90000; this.ttlMs = options.roomTtlMs || 86400000;
     this.now = options.now || Date.now; this.closing = false;
   }
   // Every operation on one room is serialized, including async database writes.
   exclusive(code, work) {
     const previous = this.queues.get(code) || Promise.resolve();
-    const task = previous.catch(() => {}).then(work);
+    const waiting = this.queues.has(code), received = Date.now();
+    if (waiting) this.logger.info("room.queued", { room: code.startsWith("_create:") ? undefined : code });
+    const task = previous.catch(() => {}).then(() => {
+      if (waiting) this.logger.info("room.queue.started", { room: code.startsWith("_create:") ? undefined : code, waitMs: Date.now() - received });
+      return work();
+    });
     this.queues.set(code, task);
     const cleanup = () => { if (this.queues.get(code) === task) this.queues.delete(code); };
     task.then(cleanup, cleanup);
@@ -84,6 +99,65 @@ class RoomService {
     this.moveReceipts.set(key, { request: move.request, response });
     if (this.moveReceipts.size > 1024) this.moveReceipts.delete(this.moveReceipts.keys().next().value);
   }
+  previousLobby(socket, event, request, fingerprint) {
+    if (!socket.data.roomCode) return null;
+    const previous = socket.data.lobbyResult;
+    if (previous?.event === event && previous.requestId === request.requestId) {
+      requireValue(previous.fingerprint === fingerprint, "REQUEST_ID_REUSED");
+      const { room, player } = this.member(socket, { roomId: previous.result.room.code });
+      return { ...previous.result, room: publicRoom(room), player: { id: player.id, side: player.side } };
+    }
+    requireValue(false, "ALREADY_IN_ROOM");
+  }
+  async bindLobby(socket, event, request, fingerprint, room, player, token) {
+    const result = { ...await this.bind(socket, room, player, token),
+      ...(request.requestId ? { requestId: request.requestId } : {}) };
+    socket.data.lobbyResult = { event, requestId: request.requestId, fingerprint, result };
+    if (request.recoveryToken) this.lobbyAttempts.delete(`${event}:${request.requestId}`);
+    return result;
+  }
+  rememberLobby(event, request, fingerprint, room, player) {
+    if (!request.recoveryToken) return;
+    player.lobbyRequest = { id: request.requestId, event, fingerprint };
+    this.lobbyAttempts.set(`${event}:${request.requestId}`, { room: clone(room), playerId: player.id });
+    if (this.lobbyAttempts.size > 1024) this.lobbyAttempts.delete(this.lobbyAttempts.keys().next().value);
+  }
+  async recoverLobby(socket, event, request, fingerprint, ownsRoomQueue = false) {
+    if (!request.recoveryToken) return null;
+    const key = `${event}:${request.requestId}`, attempted = this.lobbyAttempts.get(key);
+    if (event === "room:create" && !ownsRoomQueue) {
+      // Creation has its own queue, but recovering an existing seat must also
+      // serialize with joins, moves and disconnects in that room.
+      const code = attempted?.room.code || [...this.rooms.values()].find(room => room.players.some(player =>
+        player.lobbyRequest?.id === request.requestId && player.lobbyRequest.event === event))?.code;
+      return code ? this.exclusive(code, () => this.recoverLobby(socket, event, request, fingerprint, true)) : null;
+    }
+    if (attempted) {
+      const player = attempted.room.players.find(p => p.id === attempted.playerId);
+      requireValue(player?.tokenHash === hash(request.recoveryToken), "INVALID_SESSION");
+      requireValue(player.lobbyRequest.fingerprint === fingerprint, "REQUEST_ID_REUSED");
+      // A retry after a lost database response must check the original room.
+      const current = await this.store.get(attempted.room.code);
+      if (current) this.rooms.set(current.code, current);
+    }
+    const saved = [...this.rooms.values()].find(room => room.players.some(player => player.lobbyRequest?.id === request.requestId
+      && player.lobbyRequest.event === event));
+    if (!saved) return null;
+    const found = saved.players.find(player => player.lobbyRequest?.id === request.requestId && player.lobbyRequest.event === event);
+    requireValue(found.tokenHash === hash(request.recoveryToken), "INVALID_SESSION");
+    requireValue(found.lobbyRequest.fingerprint === fingerprint, "REQUEST_ID_REUSED");
+    requireValue(!found.left && saved.status !== "closed", "ROOM_CLOSED");
+    requireValue(saved.expiresAt > this.now(), "ROOM_NOT_FOUND");
+    requireValue(saved.status !== "paused" || found.disconnectDeadline === null || found.disconnectDeadline > this.now(), "SESSION_EXPIRED");
+    const room = clone(saved), player = room.players.find(p => p.id === found.id);
+    const oldSocket = player.socketId && this.io.sockets.sockets.get(player.socketId);
+    player.connected = true; player.socketId = socket.id; player.disconnectDeadline = null;
+    if (room.status === "paused" && room.players.every(p => p.connected && !p.left)) room.status = "active";
+    await this.commit(room, saved.version);
+    if (oldSocket && oldSocket.id !== socket.id) { oldSocket.data = {}; oldSocket.emit("session:replaced"); oldSocket.disconnect(true); }
+    this.logger.info("room.seat.recovered", { room: room.code });
+    return this.bindLobby(socket, event, request, fingerprint, room, player, request.recoveryToken);
+  }
   async commit(room, expectedVersion, move = null, renewExpiry = true) {
     room.version = expectedVersion + 1; room.updatedAt = this.now();
     if (renewExpiry) room.expiresAt = room.updatedAt + this.ttlMs;
@@ -99,6 +173,7 @@ class RoomService {
         if (current && current.version !== expectedVersion) {
           this.rooms.set(room.code, current);
           this.io.to(channel(room.code)).emit("room:state", publicRoom(current));
+          if (!move && JSON.stringify(current) === JSON.stringify(room)) return { ok: true, room: publicRoom(current) };
         }
         if (move) accepted = await this.store.findMove(room.gameId, move.playerId, move.id);
       } catch { /* Preserve the original error when recovery is unavailable. */ }
@@ -117,48 +192,84 @@ class RoomService {
   async bind(socket, room, player, token) {
     socket.data.roomCode = room.code; socket.data.playerId = player.id;
     await socket.join(channel(room.code));
-    if (!socket.connected) await this.disconnected(socket);
+    if (!socket.connected) {
+      // bind runs inside the room queue. Awaiting another operation in that
+      // queue would wait for this very operation and permanently deadlock it.
+      this.logger.warn("room.bind.disconnected", { room: room.code });
+      this.disconnected(socket).catch(error => this.logger.error("room.disconnect.failed", { room: room.code, ...errorDetails(error) }));
+    }
     return { ok: true, room: publicRoom(room), player: { id: player.id, side: player.side },
       ...(token ? { credentials: { roomId: room.code, playerId: player.id, resumeToken: token } } : {}) };
   }
   async create(socket, request) {
-    payload(request, ["side", "name"]);
-    requireValue(!socket.data.roomCode, "ALREADY_IN_ROOM");
+    payload(request, ["side", "name", "requestId", "recoveryToken"]); lobbyRequest(request);
     requireValue(["goat", "tiger"].includes(request.side), "INVALID_SIDE");
-    requireValue(this.rooms.size < 1000, "SERVER_FULL");
     const name = playerName(request.name);
-    return this.exclusive("_create", async () => {
-      requireValue(!socket.data.roomCode, "ALREADY_IN_ROOM");
-      requireValue(this.rooms.size < 1000, "SERVER_FULL");
-      let code;
-      do { code = Array.from({ length: 8 }, () => ALPHABET[crypto.randomInt(ALPHABET.length)]).join(""); }
-      while (this.rooms.has(code) || await this.store.get(code));
-      const { token, player } = makePlayer(request.side, name, socket.id);
-      const now = this.now();
-      const room = { code, gameId: crypto.randomUUID(), status: "waiting", version: 0, moveNumber: 0,
-        players: [player], game: Rules.newGame(), rematchVotes: [], startedAt: null, finishedAt: null,
-        createdAt: now, updatedAt: now, expiresAt: now + this.ttlMs };
-      await this.store.create(room); this.rooms.set(code, room);
-      return this.bind(socket, room, player, token);
+    const fingerprint = JSON.stringify({ side: request.side, name });
+    // Independent creations must not wait behind another user's database call.
+    return this.exclusive(`_create:${request.recoveryToken ? request.requestId + ":" + hash(request.recoveryToken) : socket.id}`, async () => {
+      const previous = this.previousLobby(socket, "room:create", request, fingerprint);
+      if (previous) return previous;
+      requireValue(socket.connected, "OFFLINE");
+      const recovered = await this.recoverLobby(socket, "room:create", request, fingerprint);
+      if (recovered) return recovered;
+      requireValue(this.rooms.size + this.creatingRooms < 1000, "SERVER_FULL");
+      this.creatingRooms++;
+      try {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const key = `room:create:${request.requestId}`, pending = request.recoveryToken && this.lobbyAttempts.get(key);
+          const code = pending?.room.code || Array.from({ length: 8 }, () => ALPHABET[crypto.randomInt(ALPHABET.length)]).join("");
+          if (this.rooms.has(code)) { if (pending) this.lobbyAttempts.delete(key); continue; }
+          const seat = makePlayer(request.side, name, socket.id, request.recoveryToken), now = this.now();
+          const room = pending ? clone(pending.room) : { code, gameId: crypto.randomUUID(), status: "waiting", version: 0, moveNumber: 0,
+            players: [seat.player], game: Rules.newGame(), rematchVotes: [], startedAt: null, finishedAt: null,
+            createdAt: now, updatedAt: now, expiresAt: now + this.ttlMs };
+          const player = room.players[0], token = request.recoveryToken || seat.token;
+          this.rememberLobby("room:create", request, fingerprint, room, player);
+          let created;
+          try { created = await this.store.create(room); }
+          catch (error) {
+            // A dropped response may hide a successful INSERT. Recover that
+            // exact room before returning an error or trying another code.
+            let confirmed;
+            try { confirmed = await this.store.get(code); } catch { /* Preserve the original failure. */ }
+            if (!confirmed || JSON.stringify(confirmed) !== JSON.stringify(room)) throw error;
+            created = true;
+          }
+          if (!created) {
+            if (pending) { const recovered = await this.recoverLobby(socket, "room:create", request, fingerprint); if (recovered) return recovered; }
+            this.lobbyAttempts.delete(key); continue; // A confirmed primary-key collision.
+          }
+          this.rooms.set(code, room);
+          if (pending && player.socketId !== socket.id) return this.recoverLobby(socket, "room:create", request, fingerprint);
+          return this.bindLobby(socket, "room:create", request, fingerprint, room, player, token);
+        }
+        requireValue(false, "SERVER_FULL");
+      } finally { this.creatingRooms--; }
     });
   }
   async join(socket, request) {
-    payload(request, ["roomId", "name"]);
-    requireValue(!socket.data.roomCode, "ALREADY_IN_ROOM");
+    payload(request, ["roomId", "name", "requestId", "recoveryToken"]); lobbyRequest(request);
     const code = roomCode(request.roomId), name = playerName(request.name);
+    const fingerprint = JSON.stringify({ roomId: code, name });
     return this.exclusive(code, async () => {
-      requireValue(!socket.data.roomCode, "ALREADY_IN_ROOM");
+      const previous = this.previousLobby(socket, "room:join", request, fingerprint);
+      if (previous) return previous;
+      requireValue(socket.connected, "OFFLINE");
+      const recovered = await this.recoverLobby(socket, "room:join", request, fingerprint);
+      if (recovered) return recovered;
       const saved = this.get(code);
       requireValue(saved.players.length < 2, "ROOM_FULL");
       requireValue(saved.status === "waiting", "ROOM_CLOSED");
       const room = clone(saved);
       const side = room.players[0].side === "goat" ? "tiger" : "goat";
-      const { token, player } = makePlayer(side, name, socket.id);
+      const { token, player } = makePlayer(side, name, socket.id, request.recoveryToken);
       room.players.push(player); room.startedAt = this.now();
       room.status = room.players.every(p => p.connected) ? "active" : "paused";
       if (room.status === "paused") for (const p of room.players) if (!p.connected) p.disconnectDeadline = this.now() + this.graceMs;
+      this.rememberLobby("room:join", request, fingerprint, room, player);
       await this.commit(room, saved.version);
-      return this.bind(socket, room, player, token);
+      return this.bindLobby(socket, "room:join", request, fingerprint, room, player, token);
     });
   }
   async resume(socket, request) {
@@ -314,6 +425,10 @@ class RoomService {
       });
     }
   }
-  async drain() { await Promise.allSettled([...this.queues.values()]); }
+  async drain() {
+    // A binding can enqueue disconnect cleanup while its operation completes.
+    // Include that follow-up work before shutdown closes the database.
+    while (this.queues.size) await Promise.allSettled([...this.queues.values()]);
+  }
 }
 module.exports = { RoomService, publicRoom, roomCode };

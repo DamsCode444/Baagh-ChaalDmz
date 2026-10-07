@@ -7,13 +7,14 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { io } = require("socket.io-client");
 const { createServer } = require("../server/app.cjs");
+const { createLogger } = require("../server/logging.cjs");
 
 async function waitFor(check, timeout = 5000) {
   const start = Date.now();
   while (!check()) { if (Date.now() - start > timeout) throw new Error("Condition timed out"); await new Promise(r => setTimeout(r, 15)); }
 }
 async function fixture(t, options = {}) {
-  const server = await createServer({ database: { url: ":memory:" }, rateLimits: false, ...options });
+  const server = await createServer({ database: { url: ":memory:" }, rateLimits: false, logLevel: "silent", ...options });
   const address = await server.listen(0, "127.0.0.1"), url = `http://127.0.0.1:${address.port}`, clients = [];
   t.after(async () => { for (const client of clients) client.disconnect(); await server.close(); });
   async function client() {
@@ -35,6 +36,143 @@ async function pair(f) {
   return { a, b, created, joined, room: joined.room };
 }
 function move(room, from, to) { return { roomId: room.code, gameId: room.gameId, expectedVersion: room.version, moveId: crypto.randomUUID(), from, to }; }
+const lobbyIntent = data => ({ ...data, requestId: crypto.randomUUID(), recoveryToken: crypto.randomBytes(32).toString("hex") });
+
+test("server logs trace socket requests through the database and completion without leaking credentials", async t => {
+  const records = [], logger = createLogger({ writer: line => records.push(JSON.parse(line)) });
+  const f = await fixture(t, { logger }), host = await f.client(), guest = await f.client();
+  const create = lobbyIntent({ side: "goat", name: "Private Name" });
+  const created = await request(host, "room:create", create); assert(created.ok);
+  const join = lobbyIntent({ roomId: created.room.code, name: "Private Guest" });
+  const joined = await request(guest, "room:join", join); assert(joined.ok);
+  const receipt = records.find(row => row.message === "request.received" && row.event === "room:join");
+  assert(receipt); assert.equal(receipt.socket, guest.id); assert.equal(receipt.room, created.room.code);
+  assert.equal(receipt.request, crypto.createHash("sha256").update(join.requestId).digest("hex").slice(0, 12));
+  const flow = records.filter(row => row.trace === receipt.trace);
+  assert.deepEqual(flow.map(row => row.message), ["request.received", "request.started", "database.started",
+    "database.completed", "room.result.sent", "request.completed"]);
+  assert.equal(flow.find(row => row.message === "database.completed").operation, "saveRoom");
+  assert.equal(flow.at(-1).outcome, "ok"); assert(Number.isFinite(flow.at(-1).durationMs));
+  const third = await f.client();
+  assert.equal((await request(third, "room:join", { roomId: created.room.code })).error, "ROOM_FULL");
+  assert(records.some(row => row.message === "request.failed" && row.error === "ROOM_FULL"));
+  assert(records.some(row => row.message === "request.completed" && row.outcome === "error" && row.error === "ROOM_FULL"));
+  const text = JSON.stringify(records);
+  for (const secret of [create.requestId, join.requestId, create.recoveryToken, join.recoveryToken, "Private Name", "Private Guest"])
+    assert(!text.includes(secret));
+});
+
+test("disconnecting during a join releases the room queue and retry recovers the original seat", async t => {
+  const f = await fixture(t), host = await f.client(), joining = await f.client();
+  const created = await request(host, "room:create", { side: "goat" }); assert(created.ok);
+  const intent = lobbyIntent({ roomId: created.room.code, name: "B" });
+  const save = f.server.store.save.bind(f.server.store);
+  let release, saving = false, delayed = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.server.store.save = async (...args) => {
+    if (!delayed) { delayed = true; saving = true; await gate; }
+    return save(...args);
+  };
+  const pending = request(joining, "room:join", intent).catch(() => null);
+  try {
+    await waitFor(() => saving);
+    const oldId = joining.id; joining.disconnect();
+    await waitFor(() => !f.server.io.sockets.sockets.has(oldId));
+    release();
+    await waitFor(() => f.server.service.rooms.get(created.room.code)?.status === "paused", 1500);
+    await f.server.service.drain();
+    assert.equal(f.server.service.queues.size, 0);
+    const original = f.server.service.rooms.get(created.room.code).players[1];
+    const replacement = await f.client();
+    assert.equal((await request(replacement, "room:join", { ...intent, recoveryToken: "0".repeat(64) })).error, "INVALID_SESSION");
+    assert.equal((await request(replacement, "room:join", { ...intent, name: "Changed" })).error, "REQUEST_ID_REUSED");
+    const recovered = await request(replacement, "room:join", intent); assert(recovered.ok);
+    assert.equal(recovered.player.id, original.id);
+    assert.equal(recovered.credentials.resumeToken, intent.recoveryToken);
+    assert.equal(recovered.room.players.length, 2); assert.equal(recovered.room.status, "active");
+    const publicSnapshot = JSON.stringify(recovered.room);
+    for (const secret of ["lobbyRequest", "fingerprint", "tokenHash", intent.recoveryToken]) assert(!publicSnapshot.includes(secret));
+    assert((await request(host, "game:move", move(recovered.room, null, 12))).ok);
+  } finally { release(); f.server.store.save = save; await pending; }
+});
+
+test("disconnecting during resume does not block another resume", async t => {
+  const f = await fixture(t), p = await pair(f); p.b.disconnect();
+  await waitFor(() => p.a.room?.status === "paused");
+  const resuming = await f.client(), save = f.server.store.save.bind(f.server.store);
+  let release, saving = false, delayed = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.server.store.save = async (...args) => {
+    if (!delayed) { delayed = true; saving = true; await gate; }
+    return save(...args);
+  };
+  const pending = request(resuming, "room:resume", p.joined.credentials).catch(() => null);
+  try {
+    await waitFor(() => saving);
+    const oldId = resuming.id; resuming.disconnect();
+    await waitFor(() => !f.server.io.sockets.sockets.has(oldId)); release();
+    await waitFor(() => f.server.service.rooms.get(p.room.code)?.players[1].socketId === null, 1500);
+    await f.server.service.drain(); assert.equal(f.server.service.queues.size, 0);
+    const replacement = await f.client();
+    const recovered = await request(replacement, "room:resume", p.joined.credentials); assert(recovered.ok);
+    assert.equal(recovered.player.id, p.joined.player.id); assert.equal(recovered.room.status, "active");
+  } finally { release(); f.server.store.save = save; await pending; }
+});
+
+test("concurrent creation retries on different sockets create one room and one seat", async t => {
+  const f = await fixture(t), first = await f.client(), replacement = await f.client();
+  const intent = lobbyIntent({ side: "goat", name: "A" });
+  const create = f.server.store.create.bind(f.server.store);
+  let release, inserts = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.server.store.create = async room => { inserts++; await gate; return create(room); };
+  const original = request(first, "room:create", intent).catch(() => null);
+  try {
+    await waitFor(() => inserts === 1);
+    const retried = request(replacement, "room:create", intent);
+    await waitFor(() => f.server.service.queues.size === 1); release();
+    const recovered = await retried; assert(recovered.ok);
+    const result = await original;
+    if (result) assert.equal(result.player.id, recovered.player.id);
+    assert.equal(inserts, 1); assert.equal(f.server.service.rooms.size, 1);
+    assert.equal(recovered.credentials.resumeToken, intent.recoveryToken);
+    assert.equal(recovered.room.players.length, 1);
+    await f.server.service.drain();
+    assert.equal(f.server.service.rooms.get(recovered.room.code).players[0].socketId, replacement.id);
+  } finally { release(); f.server.store.create = create; await original; }
+});
+
+test("a lobby retry recovers an uncertain write when both the save reply and recovery read were lost", async t => {
+  const f = await fixture(t), host = await f.client(), joining = await f.client();
+  const created = await request(host, "room:create", { side: "goat" }); assert(created.ok);
+  const intent = lobbyIntent({ roomId: created.room.code, name: "B" });
+  const save = f.server.store.save.bind(f.server.store), get = f.server.store.get.bind(f.server.store);
+  f.server.store.save = async (...args) => { await save(...args); throw new TypeError("lost response"); };
+  f.server.store.get = async () => { throw new TypeError("recovery unavailable"); };
+  const uncertain = await request(joining, "room:join", intent);
+  f.server.store.save = save; f.server.store.get = get;
+  assert.equal(uncertain.error, "DATABASE_UNAVAILABLE");
+  joining.disconnect(); const replacement = await f.client();
+  const recovered = await request(replacement, "room:join", intent); assert(recovered.ok);
+  assert.equal(recovered.room.players.length, 2); assert.equal(recovered.credentials.resumeToken, intent.recoveryToken);
+  assert.equal(f.server.service.rooms.size, 1);
+});
+
+test("creation retry recovers the original room after an insert reply and its verification read were lost", async t => {
+  const f = await fixture(t), first = await f.client();
+  const intent = lobbyIntent({ side: "goat", name: "A" });
+  const create = f.server.store.create.bind(f.server.store), get = f.server.store.get.bind(f.server.store);
+  let originalRoom;
+  f.server.store.create = async room => { originalRoom = room; await create(room); throw new TypeError("lost insert reply"); };
+  f.server.store.get = async () => { throw new TypeError("verification unavailable"); };
+  const uncertain = await request(first, "room:create", intent);
+  f.server.store.create = create; f.server.store.get = get;
+  assert.equal(uncertain.error, "DATABASE_UNAVAILABLE"); first.disconnect();
+  const replacement = await f.client(), recovered = await request(replacement, "room:create", intent); assert(recovered.ok);
+  assert.equal(recovered.room.code, originalRoom.code); assert.equal(recovered.player.id, originalRoom.players[0].id);
+  const stored = await f.server.store.client.execute("SELECT COUNT(*) AS count FROM baagh_chaal_rooms");
+  assert.equal(Number(stored.rows[0].count), 1);
+});
 
 test("rooms assign opposite sides, reject a third player and keep credentials private", async t => {
   const f = await fixture(t), p = await pair(f), third = await f.client();
@@ -44,6 +182,61 @@ test("rooms assign opposite sides, reject a third player and keep credentials pr
   const serialized = JSON.stringify(p.room);
   assert(!serialized.includes("token")); assert(!serialized.includes("socketId")); assert(!serialized.includes("positionCounts"));
   assert.equal((await request(third, "room:sync", { roomId: p.room.code })).error, "NOT_IN_ROOM");
+});
+
+test("creation uses one insert and a delayed creation does not block another socket", async t => {
+  const f = await fixture(t), a = await f.client(), b = await f.client();
+  const create = f.server.store.create.bind(f.server.store), get = f.server.store.get.bind(f.server.store);
+  let release, inserts = 0, reads = 0;
+  const delayed = new Promise(resolve => { release = resolve; });
+  f.server.store.create = async room => { if (++inserts === 1) await delayed; return create(room); };
+  f.server.store.get = (...args) => { reads++; return get(...args); };
+  const first = request(a, "room:create", { side: "goat" });
+  try {
+    await waitFor(() => inserts === 1);
+    const second = await request(b, "room:create", { side: "tiger" }); assert(second.ok);
+    assert.equal(inserts, 2); assert.equal(reads, 0);
+    release(); assert((await first).ok);
+  } finally { release(); f.server.store.create = create; f.server.store.get = get; await first; }
+});
+
+test("create and join retries return the same private seats after lost acknowledgements", async t => {
+  const f = await fixture(t), a = await f.client(), b = await f.client();
+  const create = { side: "goat", name: "A", requestId: crypto.randomUUID() };
+  const created = await request(a, "room:create", create); assert(created.ok);
+  assert.deepEqual(await request(a, "room:create", create), created);
+  assert.equal((await request(a, "room:create", { ...create, side: "tiger" })).error, "REQUEST_ID_REUSED");
+  const join = { roomId: created.room.code, name: "B", requestId: crypto.randomUUID() };
+  const joined = await request(b, "room:join", join); assert(joined.ok);
+  assert.deepEqual(await request(b, "room:join", join), joined);
+  const recovered = await request(a, "room:create", create);
+  assert.deepEqual(recovered.credentials, created.credentials); assert.equal(recovered.room.status, "active");
+  assert.equal(f.server.service.rooms.size, 1); assert.equal(recovered.room.players.length, 2);
+});
+
+test("lost database replies after create and join still bind recoverable seats", async t => {
+  const f = await fixture(t), a = await f.client(), b = await f.client();
+  const create = f.server.store.create.bind(f.server.store);
+  f.server.store.create = async room => { await create(room); throw new TypeError("lost INSERT response"); };
+  const created = await request(a, "room:create", { side: "goat", requestId: crypto.randomUUID() }); assert(created.ok);
+  f.server.store.create = create;
+  const save = f.server.store.save.bind(f.server.store);
+  f.server.store.save = async (...args) => { await save(...args); throw new TypeError("lost join response"); };
+  const joined = await request(b, "room:join", { roomId: created.room.code, requestId: crypto.randomUUID() }); assert(joined.ok);
+  f.server.store.save = save;
+  assert.equal(joined.room.status, "active"); assert.equal(joined.player.id, joined.credentials.playerId);
+  assert((await request(b, "room:sync", { roomId: created.room.code })).ok);
+  assert.equal(f.server.service.rooms.size, 1); assert.equal(f.server.service.creatingRooms, 0);
+});
+
+test("a failed creation releases its reservation and a retry succeeds", async t => {
+  const f = await fixture(t), a = await f.client(), create = f.server.store.create.bind(f.server.store);
+  f.server.store.create = async () => { const error = new Error("timed out"); error.name = "TimeoutError"; throw error; };
+  const result = await request(a, "room:create", { side: "goat" });
+  assert.equal(result.error, "DATABASE_TIMEOUT"); assert.equal(f.server.service.creatingRooms, 0);
+  assert.equal(f.server.service.rooms.size, 0);
+  f.server.store.create = create;
+  assert((await request(a, "room:create", { side: "goat" })).ok);
 });
 test("moves validate ownership, shape, legal destinations and stale versions", async t => {
   const f = await fixture(t), p = await pair(f), before = JSON.stringify(p.room.game);
@@ -200,4 +393,22 @@ test("stored rooms, credentials and duplicate acknowledgements survive a server 
   assert.equal(resumed.room.game.board[12], "goat"); assert.equal(resumed.room.moveNumber, 1);
   assert.deepEqual(await request(a, "game:move", action), accepted);
   // The temporary database is deliberately outside the project; OS temp cleanup owns it.
+});
+
+test("unfinished lobby intents recover the same private seats after a server restart", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "baagh-chaal-lobby-test-"));
+  const database = { url: pathToFileURL(path.join(dir, "rooms.db")).href };
+  const first = await fixture(t, { database }), a = await first.client(), b = await first.client();
+  const create = lobbyIntent({ side: "goat", name: "A" });
+  const created = await request(a, "room:create", create); assert(created.ok);
+  const join = lobbyIntent({ roomId: created.room.code, name: "B" });
+  const joined = await request(b, "room:join", join); assert(joined.ok);
+  await first.server.close();
+  const second = await fixture(t, { database }), newA = await second.client(), newB = await second.client();
+  const recoveredCreate = await request(newA, "room:create", create); assert(recoveredCreate.ok);
+  const recoveredJoin = await request(newB, "room:join", join); assert(recoveredJoin.ok);
+  assert.deepEqual(recoveredCreate.credentials, created.credentials);
+  assert.deepEqual(recoveredJoin.credentials, joined.credentials);
+  assert.equal(recoveredJoin.room.status, "active"); assert.equal(recoveredJoin.room.players.length, 2);
+  assert.equal(second.server.service.rooms.size, 1);
 });

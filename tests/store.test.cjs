@@ -19,6 +19,20 @@ test("database initialization does not retry permanent SQL errors", async t => {
   await assert.rejects(store.init(), { code: "SQLITE_AUTH" }); assert.equal(attempts, 1);
 });
 
+test("database deadlines are returned without repeated timeouts", async t => {
+  const store = new RoomStore({ url: ":memory:" }); t.after(() => store.close()); let attempts = 0;
+  store.client.batch = async () => { attempts++; const error = new Error("timed out"); error.name = "TimeoutError"; throw error; };
+  await assert.rejects(store.init(), { name: "TimeoutError" }); assert.equal(attempts, 1);
+});
+
+test("room code collisions do not overwrite existing rooms", async t => {
+  const store = new RoomStore({ url: ":memory:" }); t.after(() => store.close()); await store.init();
+  const room = { code: "TESTROOM", version: 0, expiresAt: 10000 };
+  assert.equal(await store.create(room), true);
+  assert.equal(await store.create({ ...room, version: 99 }), false);
+  assert.deepEqual(await store.get(room.code), room);
+});
+
 async function savedMove(t) {
   const store = new RoomStore({ url: ":memory:" }); t.after(() => store.close()); await store.init();
   const room = { code: "TESTROOM", gameId: "test-game", version: 0, expiresAt: 10000, updatedAt: 1, startedAt: 1, game: Rules.newGame() };

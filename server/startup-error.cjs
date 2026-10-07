@@ -9,7 +9,7 @@ function startupError(error, config = {}) {
   const codes = new Set(errors.map(item => item.code));
   if (codes.has("EADDRINUSE")) return `Port ${config.port || 3000} is already in use. Close the existing game server or set PORT to another number in .env.`;
   if (codes.has("INVALID_DATABASE_PROXY")) return "Invalid database proxy setting. Use an http:// or https:// proxy URL, or set DATABASE_PROXY_URL=direct.";
-  if ([...codes].some(code => /^(UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_SOCKET|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND)$/.test(code))) {
+  if (errors.some(item => item.name === "TimeoutError") || [...codes].some(code => /^(UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_SOCKET|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND)$/.test(code))) {
     return "Cannot reach the database (network connection failed). Check your internet connection and proxy. Windows proxies are detected automatically; DATABASE_PROXY_URL can override the proxy or be set to direct. Run npm run db:check to retry.";
   }
   if ([...codes].some(code => /^(CERT_|ERR_TLS_|DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN)/.test(code))) {

@@ -23,8 +23,11 @@ function loadConfig() {
   }
   return {
     root, database: { url, authToken, proxyUrl: process.env.DATABASE_PROXY_URL,
-      useSystemProxy: process.env.DATABASE_USE_SYSTEM_PROXY !== "false" },
+      useSystemProxy: process.env.DATABASE_USE_SYSTEM_PROXY !== "false",
+      requestTimeoutMs: positive(process.env.DATABASE_REQUEST_TIMEOUT_MS, 5000, "DATABASE_REQUEST_TIMEOUT_MS") },
     port: positive(process.env.PORT, 3000, "PORT"), host: process.env.HOST || "0.0.0.0",
+    logLevel: process.env.LOG_LEVEL || "info",
+    logFile: process.env.LOG_FILE ? path.resolve(root, process.env.LOG_FILE) : path.join(root, ".data", "server.log"),
     graceMs: positive(process.env.RECONNECT_GRACE_MS, 90000, "RECONNECT_GRACE_MS"),
     roomTtlMs: positive(process.env.ROOM_TTL_MS, 86400000, "ROOM_TTL_MS"),
     allowedOrigins: (process.env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean)

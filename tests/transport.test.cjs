@@ -8,7 +8,9 @@ const { startupError } = require("../server/startup-error.cjs");
 
 async function networkFixture(t) {
   const target = http.createServer((req, res) => {
+    if (req.url === "/stall-headers") return;
     res.setHeader("Content-Type", "application/json");
+    if (req.url === "/stall-body") { res.write('{"incomplete":'); return; }
     res.end(JSON.stringify({ path: req.url, authorization: req.headers.authorization || null }));
   });
   target.listen(0, "127.0.0.1"); await once(target, "listening");
@@ -86,16 +88,32 @@ test("Windows proxy parsing respects protocol maps, disabled settings and bypass
 test("local databases, direct overrides and custom fetch skip Windows proxy discovery", async () => {
   let reads = 0;
   const options = { env: { HTTPS_PROXY: "http://127.0.0.1:9999" }, platform: "win32", readSystemProxy: () => { reads++; throw new Error("unexpected discovery"); } };
-  for (const config of [{ url: ":memory:" }, { url: "file:test.db" }, { url: "libsql://database.example", proxyUrl: "direct" }]) {
+  for (const config of [{ url: ":memory:" }, { url: "file:test.db" }]) {
     const transport = createDatabaseTransport(config, options);
     assert.equal(transport.fetch, undefined); await transport.close();
   }
+  const direct = createDatabaseTransport({ url: "libsql://database.example", proxyUrl: "direct" }, options);
+  assert.equal(typeof direct.fetch, "function"); assert.equal(direct.route, "direct"); await direct.close();
   const customFetch = async () => new Response();
   const custom = createDatabaseTransport({ url: "libsql://database.example", fetch: customFetch }, options);
   assert.equal(custom.fetch, customFetch); await custom.close();
   const disabled = createDatabaseTransport({ url: "libsql://database.example", useSystemProxy: false }, { ...options, env: {} });
-  assert.equal(disabled.fetch, undefined); await disabled.close();
+  assert.equal(typeof disabled.fetch, "function"); assert.equal(disabled.route, "direct"); await disabled.close();
   assert.equal(reads, 0);
+});
+
+test("database deadlines abort stalled response headers and bodies", async t => {
+  const fixture = await networkFixture(t);
+  const transport = createDatabaseTransport({ url: fixture.targetUrl, proxyUrl: fixture.proxyUrl, requestTimeoutMs: 100 }, { env: {} });
+  try {
+    for (const path of ["/stall-headers", "/stall-body"]) {
+      const started = Date.now();
+      await assert.rejects(async () => { const response = await transport.fetch(`${fixture.targetUrl}${path}`); await response.text(); }, { name: "TimeoutError" });
+      assert(Date.now() - started < 1500);
+    }
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(transport.fetch(fixture.targetUrl, { signal: controller.signal }), { name: "AbortError" });
+  } finally { await transport.close(); }
 });
 
 test("proxy and startup failures explain the problem without exposing secret messages", () => {

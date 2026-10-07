@@ -46,6 +46,8 @@ const vsComputer     = () => $("mode").value === "cpu";
 const isOnline       = () => $("mode").value === "online";
 const computerSide   = () => $("mySide").value === "goat" ? "tiger" : "goat";
 const isComputerTurn = () => !game.winner && vsComputer() && game.turn === computerSide();
+const roomOperationText = () => ({ "room:create": "Creating room…", "room:join": "Joining room…",
+  "room:resume": "Reconnecting to room…", "game:rematch": "Preparing rematch…" }[Multiplayer.state.operation] || "Updating room…");
 
 function newGame() {
   if (isOnline()) {
@@ -134,9 +136,9 @@ function statusText(result) {
   if (result) return !vs ? WORDS.win(game.winner) : (result === "win" ? WORDS.youWin : WORDS.youLose)(icon(me));
   if (isOnline()) {
     const state = Multiplayer.state;
-    if (!state.room) return "Create or join an online room";
+    if (!state.room) return state.busy ? roomOperationText() : "Create or join an online room";
     if (!state.connected) return "Connection lost — reconnecting";
-    if (state.busy) return "Updating room…";
+    if (state.busy) return roomOperationText();
     if (state.room.status === "waiting") return "Waiting for your friend to join";
     if (state.room.status === "paused") return "Match paused — waiting for reconnection";
     if (state.room.status === "closed") return "Room closed";
@@ -260,7 +262,7 @@ function renderOnline() {
   $("overNew").disabled = online && !canRematch();
   $("mode").disabled = online && (state.busy || state.pending);
   if (!online) return;
-  $("connectionStatus").textContent = state.connected ? state.busy ? "Updating room…" : "Connected" : state.available ? "Connecting to server…" : "Start with npm start for online play";
+  $("connectionStatus").textContent = state.connected ? state.busy ? roomOperationText() : "Connected" : state.available ? "Connecting to server…" : "Start with npm start for online play";
   $("connectionStatus").dataset.connected = String(state.connected);
   $("retryConnection").hidden = state.connected && !state.error;
   $("retryConnection").disabled = state.busy || state.pending;
