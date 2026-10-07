@@ -21,7 +21,7 @@ h1 { text-align: center; margin: 2px 0 12px; font-size: clamp(22px, 5.5vw, 34px)
 #about     { grid-area: about; }
 
 @media (min-width: 300px) {
-  .layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "game" "stage" "about"; }
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "stage" "game" "about"; }
   #gamePanelTitle { display: none;}
 }
 @media (min-width: 760px) {
@@ -80,11 +80,15 @@ button:disabled { opacity: .4; cursor: default; }
 .lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .lines line { stroke: var(--line-color); stroke-width: var(--line-width); stroke-linecap: round; vector-effect: non-scaling-stroke; }
 
-.point { position: absolute; width: var(--hit-size); aspect-ratio: 1; transform: translate(-50%, -50%);
+.point { position: absolute; width: max(44px, var(--hit-size)); aspect-ratio: 1; transform: translate(-50%, -50%);
+         min-height: 0; padding: 0; border: 0; background: transparent; border-radius: 50%;
          display: grid; place-items: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .point::before { content: ""; width: var(--point-size); aspect-ratio: 1; border-radius: 50%;
                  background: var(--point-color); border: .5cqw solid var(--point-ring); transition: transform .12s; }
 @media (hover: hover) { .point:hover::before { transform: scale(1.4); } }
+.point:hover { background: transparent; }
+.point:focus-visible { outline: 3px solid var(--selected-ring); outline-offset: 2px; }
+.point[aria-disabled="true"] { cursor: default; }
 .point.last-from::before { border-color: var(--last-move-ring); width: calc(var(--point-size) * 1.4); }
 .point.last-to::before   { border-color: var(--last-move-ring); width: calc(var(--point-size) * 2); }
 .point.move::before    { background: var(--move-color);    border-color: var(--move-ring);    width: var(--point-size-active); box-shadow: 0 0 2cqw var(--move-color); }
@@ -133,6 +137,26 @@ button:disabled { opacity: .4; cursor: default; }
 .stat.bump   { animation: bump var(--anim-drop) ease-out; }
 #overlay     { animation: fade var(--anim-popup) ease-out; }
 .popup       { animation: pop var(--anim-popup) cubic-bezier(.2, 1.4, .4, 1); }
+
+/* Online room controls use the same theme as local play. */
+input { width: 100%; min-width: 0; min-height: 44px; margin-top: 4px; padding: 9px;
+        border: 2px solid var(--panel-border); border-radius: 10px; background: #fff9ea;
+        color: var(--text-color); font: inherit; font-size: 15px; text-transform: none; letter-spacing: normal; }
+.online-panel { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--panel-border); }
+.online-panel label { margin-bottom: 10px; }
+.online-panel button { width: 100%; }
+.connection-status { margin: 0 0 12px; font-size: 13px; font-weight: 700; }
+.connection-status[data-connected="true"] { color: var(--win-color); }
+.join-row { display: grid; grid-template-columns: minmax(0, 1fr) 74px; gap: 8px; align-items: end; margin-top: 14px; }
+.join-row label { margin: 0; }
+#roomCode { text-transform: uppercase; letter-spacing: .12em; }
+.room-code-label { margin: 0 0 10px; }
+#activeRoomCode { display: block; font-size: 25px; letter-spacing: .15em; }
+.player-list { white-space: pre-line; font-size: 14px; }
+.room-help { font-size: 13px; }
+.network-error { color: var(--lose-color); font-size: 13px; margin-bottom: 0; }
+#inviteFallback { margin-top: 10px; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--selected-ring); outline-offset: 2px; }
 
 /* People who ask their device for less motion get none. */
 @media (prefers-reduced-motion: reduce) {

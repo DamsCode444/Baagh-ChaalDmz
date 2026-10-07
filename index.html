@@ -17,17 +17,17 @@
 
   <main class="stage">
     <div class="turn" id="turn">
-      <span id="status"></span>
+      <span id="status" role="status" aria-live="polite"></span>
       <span id="phaseLine"></span>
     </div>
-    <div id="board"><div id="grid"></div></div>
+    <div id="board"><div id="grid" role="group" aria-label="Baagh-Chaal board"></div></div>
   </main>
 
   <section class="panel" id="gamePanel">
     <h2 id="gamePanelTitle">Game</h2>
     <div class="settings">
       <label>Mode
-        <select id="mode"><option value="2p">2 players</option><option value="cpu" selected>vs Computer</option></select>
+        <select id="mode"><option value="2p">Local 2 players</option><option value="cpu" selected>vs Computer</option><option value="online">Online multiplayer</option></select>
       </label>
       <label class="cpu-only">You play
         <select id="mySide"><option value="goat" data-icon="goat">Goats</option><option value="tiger" data-icon="tiger">Tigers</option></select>
@@ -36,6 +36,31 @@
         <select id="level"><option value="1">Easy</option><option value="2" selected>Medium</option><option value="4">Hard</option></select>
       </label>
     </div>
+
+    <section id="onlinePanel" class="online-panel" hidden aria-label="Online multiplayer">
+      <p id="connectionStatus" class="connection-status" role="status" aria-live="polite">Connecting…</p>
+      <button id="retryConnection" type="button" class="secondary" hidden>Reconnect</button>
+      <div id="roomLobby">
+        <label>Your name <input id="playerName" maxlength="24" autocomplete="nickname" placeholder="Player"></label>
+        <label>Create room as
+          <select id="roomSide"><option value="goat">Goats</option><option value="tiger">Tigers</option></select>
+        </label>
+        <button id="createRoom" type="button">Create room</button>
+        <form id="joinForm" class="join-row">
+          <label>Room code <input id="roomCode" maxlength="8" minlength="8" required autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="8-character code"></label>
+          <button id="joinRoom" type="submit" class="secondary">Join</button>
+        </form>
+      </div>
+      <div id="roomDetails" hidden>
+        <p class="room-code-label">Room <strong id="activeRoomCode"></strong></p>
+        <button id="copyInvite" type="button" class="secondary">Copy invite link</button>
+        <label id="inviteFallback" hidden>Invite link <input id="inviteLink" readonly></label>
+        <p id="playerList" class="player-list"></p>
+        <p id="roomHelp" class="room-help"></p>
+        <div class="btn-row"><button id="resign" type="button" class="secondary">Resign</button><button id="leaveRoom" type="button" class="secondary">Leave room</button></div>
+      </div>
+      <p id="networkError" class="network-error" role="alert" hidden></p>
+    </section>
 
     <div class="stats">
       <div class="stat"><b id="inHand"></b><small>In hand</small></div>
@@ -66,15 +91,18 @@
     <h4>How to win</h4>
     <ul>
       <li>Tigers: capture <span data-rule="capturesToWin"></span> goats.</li>
+      <li>Tigers also win if the goats have no legal moves.</li>
       <li>Goats: trap every tiger so none can move.</li>
       <li>Draw: the same position happens <span data-rule="repeatsForDraw"></span> times.</li>
     </ul>
+    <h4>Online play</h4>
+    <p>Create a room and share its invite link, or enter a friend's room code. Goats move first. Leaving an active match counts as resignation. A lost connection pauses play for 90 seconds by default; the connected player then wins. Both players must accept a rematch, which swaps sides.</p>
   </details>
 
 </div>
 
 <div id="overlay">
-  <div class="popup" id="popup">
+  <div class="popup" id="popup" role="dialog" aria-modal="true" aria-labelledby="overTitle" aria-describedby="overMsg" tabindex="-1">
     <h2 id="overTitle"></h2>
     <p id="overMsg"></p>
     <div class="btn-row">
@@ -86,6 +114,9 @@
 
 <script src="js/rules.js"></script>  <!-- the game rules (no screen code) -->
 <script src="js/ai.js"></script>     <!-- the computer player -->
+<script src="js/controller.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="js/multiplayer.js"></script>
 <script src="js/ui.js"></script>     <!-- screen + clicks (no rules) -->
 </body>
 </html>
