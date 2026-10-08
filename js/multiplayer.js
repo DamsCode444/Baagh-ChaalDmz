@@ -101,7 +101,7 @@ const Multiplayer = (() => {
   }
   function ensureSocket() {
     if (socket || !state.available) return;
-    socket = io({ autoConnect: false, reconnection: true, transports: ["websocket", "polling"], tryAllTransports: true });
+    socket = io("https://baagh-chaaldmz.onrender.com", { autoConnect: false, reconnection: true, transports: ["websocket", "polling"], tryAllTransports: true });
     socket.on("connect", async () => {
       state.connected = true; state.error = ""; notify();
       if (enabled && credentials) await resume();
