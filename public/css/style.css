@@ -20,9 +20,8 @@ h1 { text-align: center; margin: 2px 0 12px; font-size: clamp(22px, 5.5vw, 34px)
 #gamePanel { grid-area: game; }
 #about     { grid-area: about; }
 
-
-@media (max-width: 759px) {
-  .layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "game" "stage" "about"; }
+@media (min-width: 300px) {
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "stage" "game" "about"; }
   #gamePanelTitle { display: none;}
 }
 @media (min-width: 760px) {
@@ -42,11 +41,7 @@ details h4 { margin: 14px 0 4px; font-size: 15px; }
 details p, details ul { margin: 4px 0; font-size: 14px; line-height: 1.5; }
 details ul { padding-left: 20px; }
 
-.settings { display: grid; grid-template-columns: 1fr; gap: 10px; }
-@media (max-width: 759px) {
-  .settings { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-  .settings select { width: 100%; min-width: 0; padding-left: 6px; padding-right: 6px; }
-}
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
 label { display: flex; flex-direction: column; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-color); }
 select { margin-top: 4px; font: inherit; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text-color);
          padding: 9px 8px; min-height: 44px; border: 2px solid var(--panel-border); border-radius: 10px; background: #fff9ea; }
