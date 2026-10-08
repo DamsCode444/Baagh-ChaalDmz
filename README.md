@@ -85,10 +85,3 @@ server/logging.cjs Request context, safe metadata and database timing
 
 Socket events: `room:create`, `room:join`, `room:resume`, `room:sync`, `room:leave`, `game:move`, `game:resign`, and `game:rematch`. Requests receive `{ ok, error?, room? }` acknowledgements. Accepted snapshots arrive through `room:state`. Creation/join responses privately include seat credentials; public snapshots omit credentials, socket IDs and repetition history.
 
-## Deploy
-
-Run **one persistent Node process** with `npm start` on a host supporting WebSocket connections. Set the database credentials through the host's environment settings, use HTTPS, and set `PORT` as required. If a reverse proxy changes the upstream Host header, set `ALLOWED_ORIGINS` to the exact public origin, for example `https://game.example.com`. The frontend and socket backend are served from the same origin. Database initialization must succeed before the server begins listening.
-
-This implementation owns live rooms in one process. Multiple instances require a shared Socket.IO adapter plus shared ownership/presence coordination; database persistence alone does not provide cross-instance broadcasting. Guest seats are private bearer credentials rather than registered accounts. Closing a tab removes its tab-specific credentials; refreshing preserves them.
-
-Useful references: [Socket.IO rooms](https://socket.io/docs/v4/rooms/), [delivery guarantees](https://socket.io/docs/v4/delivery-guarantees/), [Turso JavaScript SDK](https://docs.turso.tech/sdk/ts/reference).
